@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stamp the Python package version in pyproject.toml with a +compat local version. Idempotent."""
+"""Stamp the Python package version in pyproject.toml with a +lilbee local version. Idempotent."""
 
 import os
 import re
@@ -16,12 +16,12 @@ def main() -> int:
         print("no version line in packages/python/pyproject.toml", file=sys.stderr)
         return 1
     base = match.group(1).split("+", 1)[0]
-    version = f"{base}+compat"
+    version = f"{base}+lilbee"
     PYPROJECT.write_text(text.replace(match.group(0), f'version = "{version}"', 1), encoding="utf-8")
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as handle:
-            handle.write(f"compat_version={version}\n")
+            handle.write(f"lilbee_version={version}\n")
     print(f"stamped {PYPROJECT} -> {version}")
     return 0
 

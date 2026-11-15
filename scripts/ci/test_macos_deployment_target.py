@@ -30,7 +30,7 @@ def test_every_macos_build_targets_the_manifest_floor() -> None:
     for workflow in sorted((ROOT / ".github" / "workflows").glob("*.yaml")):
         for line in workflow.read_text().splitlines():
             for value in re.findall(r'MACOSX_DEPLOYMENT_TARGET(?:: "|=)([0-9.]+)', line):
-                # The oldmac branch lowers only the Python wheel floor; every other artifact keeps the manifest floor.
+                # The lilbee-main branch lowers only the Python wheel floor; every other artifact keeps the manifest floor.
                 if "cibw-environment-macos" in line:
                     wheel_pins.append((workflow.name, value))
                 else:

@@ -1,14 +1,14 @@
 name: sync-upstream
 
-# Re-applies the oldmac patch onto the newest published upstream release (not a
+# Re-applies the lilbee-main patch onto the newest published upstream release (not a
 # draft, not a prerelease). The patch
-# commits are rebased with `git rebase --onto`, so oldmac stays a short series
-# on top of one upstream tag. A conflict aborts and leaves oldmac untouched.
+# commits are rebased with `git rebase --onto`, so lilbee-main stays a short series
+# on top of one upstream tag. A conflict aborts and leaves lilbee-main untouched.
 # Pushes use a deploy key (SYNC_SSH_KEY secret): the patch changes workflow
 # files, which the Actions token cannot push. A failed run opens one issue.
 on:
   push:
-    branches: [oldmac]
+    branches: [lilbee-main]
     paths: [.github/workflows/sync-upstream.yml]
   schedule:
     - cron: "0 8 * * 1"   # Mondays 08:00 UTC
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ssh-key: ${{ secrets.SYNC_SSH_KEY }}
-          ref: oldmac
+          ref: lilbee-main
           fetch-depth: 0
 
       - name: Rebase the patch onto the newest upstream release tag
@@ -59,7 +59,7 @@ jobs:
           echo "newest upstream tag: $newest (commit $(git rev-parse --short "$newest^{commit}"))"
           echo "tag=$newest" >> "$GITHUB_OUTPUT"
           if [ "$base" = "$(git rev-parse "$newest^{commit}")" ]; then
-            echo "oldmac already sits on $newest"
+            echo "lilbee-main already sits on $newest"
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -80,9 +80,9 @@ jobs:
           python -m pip install pyyaml
           python scripts/ci/test_macos_deployment_target.py
 
-      - name: Push oldmac
+      - name: Push lilbee-main
         if: steps.rebase.outputs.changed == 'true'
-        run: git push --force-with-lease origin oldmac
+        run: git push --force-with-lease origin lilbee-main
 
       - name: File an issue on failure
         if: failure()
@@ -93,6 +93,6 @@ jobs:
             --search "sync-upstream failed in:title" --json number --jq length)
           if [ "$existing" = "0" ]; then
             gh issue create -R "$GITHUB_REPOSITORY" \
-              --title "sync-upstream failed: oldmac needs a hand" \
-              --body "The scheduled sync could not re-apply the oldmac patch onto the newest upstream release tag, or the floor tests failed. Rebase oldmac by hand and push it. Failed run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              --title "sync-upstream failed: lilbee-main needs a hand" \
+              --body "The scheduled sync could not re-apply the lilbee-main patch onto the newest upstream release tag, or the floor tests failed. Rebase lilbee-main by hand and push it. Failed run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi

@@ -1,8 +1,8 @@
-name: Oldmac Wheels
+name: Lilbee Wheels
 
 # Builds the xberg Python wheel set of upstream's publish.yaml (manylinux 2_28
 # x86_64 and aarch64, musllinux 1_2 x86_64 and aarch64, Windows amd64, macOS
-# arm64 and x86_64), versioned <upstream>+compat, and attaches it to a release
+# arm64 and x86_64), versioned <upstream>+lilbee, and attaches it to a release
 # of this fork. The macOS wheels target macOS 11 instead of 15. Every Mach-O
 # slice is checked with otool against the 11.0 floor, every Linux wheel is
 # shown by auditwheel, and every wheel is installed and run once.
@@ -51,9 +51,9 @@ jobs:
       - name: Install system dependencies
         uses: ./.github/actions/install-system-deps
 
-      - name: Stamp the +compat version
+      - name: Stamp the +lilbee version
         shell: bash
-        run: python .github/scripts/compat_version.py
+        run: python .github/scripts/lilbee_version.py
 
       - name: Setup ONNX Runtime (Windows)
         if: runner.os == 'Windows'
@@ -159,7 +159,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: oldmac-wheel-${{ matrix.os }}
+          name: lilbee-wheel-${{ matrix.os }}
           path: wheelhouse/*.whl
           if-no-files-found: error
 
@@ -183,8 +183,8 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Stamp the +compat version
-        run: python .github/scripts/compat_version.py
+      - name: Stamp the +lilbee version
+        run: python .github/scripts/lilbee_version.py
 
       - name: Resolve build id
         id: build_id
@@ -219,7 +219,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: oldmac-wheel-musl-${{ matrix.arch }}
+          name: lilbee-wheel-musl-${{ matrix.arch }}
           path: wheelhouse/*.whl
           if-no-files-found: error
 
@@ -239,7 +239,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: oldmac-wheel-*
+          pattern: lilbee-wheel-*
           merge-multiple: true
           path: wheelhouse
 
@@ -259,6 +259,6 @@ jobs:
             git push origin "$tag"
             gh release create "$tag" -R "$GITHUB_REPOSITORY" --verify-tag \
               --prerelease --title "$tag" \
-              --notes "xberg wheels (manylinux, musllinux, Windows, macOS 11 and later), built from the oldmac branch."
+              --notes "xberg wheels (manylinux, musllinux, Windows, macOS 11 and later), built from the lilbee-main branch."
           fi
           gh release upload "$tag" wheelhouse/*.whl -R "$GITHUB_REPOSITORY" --clobber
