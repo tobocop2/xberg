@@ -26,12 +26,20 @@ def test_every_macos_build_targets_the_manifest_floor() -> None:
     # carry that floor and every other deployment target must equal it. ~keep
     expected = f"{macos_floor()}.0"
     pins = []
+    wheel_pins = []
     for workflow in sorted((ROOT / ".github" / "workflows").glob("*.yaml")):
-        for value in re.findall(r'MACOSX_DEPLOYMENT_TARGET(?:: "|=)([0-9.]+)', workflow.read_text()):
-            pins.append((workflow.name, value))
-    pinned_workflows = {name for name, _ in pins}
+        for line in workflow.read_text().splitlines():
+            for value in re.findall(r'MACOSX_DEPLOYMENT_TARGET(?:: "|=)([0-9.]+)', line):
+                # The oldmac branch lowers only the Python wheel floor; every other artifact keeps the manifest floor.
+                if "cibw-environment-macos" in line:
+                    wheel_pins.append((workflow.name, value))
+                else:
+                    pins.append((workflow.name, value))
+    pinned_workflows = {name for name, _ in pins + wheel_pins}
     assert {"publish.yaml", "ci-python-wheel-smoke.yaml", "qualify-macos-elixir-nif.yaml"} <= pinned_workflows
     assert [pin for pin in pins if pin[1] != expected] == [], f"deployment targets differ from {expected}"
+    assert len(wheel_pins) == 2, wheel_pins
+    assert [pin for pin in wheel_pins if pin[1] != "11.0"] == [], "wheel deployment targets differ from 11.0"
 
     heif = (ROOT / "scripts" / "ci" / "build-macos-heif-deps.sh").read_text()
     assert f'TARGET="${{MACOSX_DEPLOYMENT_TARGET:-{expected}}}"' in heif
