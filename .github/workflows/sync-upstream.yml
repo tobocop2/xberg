@@ -1,6 +1,6 @@
 name: sync-upstream
 
-# Re-applies the oldmac patch onto the newest published upstream release (not a
+# Re-applies the oldmac and lilbee-main patches onto the newest published upstream release (not a
 # draft, not a prerelease). The patch
 # commits are rebased with `git rebase --onto`, so oldmac stays a short series
 # on top of one upstream tag. A conflict aborts and leaves oldmac untouched.
@@ -8,7 +8,7 @@ name: sync-upstream
 # files, which the Actions token cannot push. A failed run opens one issue.
 on:
   push:
-    branches: [oldmac]
+    branches: [oldmac, lilbee-main]
     paths: [.github/workflows/sync-upstream.yml]
   schedule:
     - cron: "0 8 * * 1"   # Mondays 08:00 UTC
@@ -29,13 +29,20 @@ env:
 
 jobs:
   sync:
+    name: sync (${{ matrix.branch }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [oldmac, lilbee-main]
+    env:
+      BRANCH: ${{ matrix.branch }}
     steps:
       - uses: actions/checkout@v4
         with:
           ssh-key: ${{ secrets.SYNC_SSH_KEY }}
-          ref: oldmac
+          ref: ${{ matrix.branch }}
           fetch-depth: 0
 
       - name: Rebase the patch onto the newest upstream release tag
@@ -59,7 +66,7 @@ jobs:
           echo "newest upstream tag: $newest (commit $(git rev-parse --short "$newest^{commit}"))"
           echo "tag=$newest" >> "$GITHUB_OUTPUT"
           if [ "$base" = "$(git rev-parse "$newest^{commit}")" ]; then
-            echo "oldmac already sits on $newest"
+            echo "$BRANCH already sits on $newest"
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -80,9 +87,9 @@ jobs:
           python -m pip install pyyaml
           python scripts/ci/test_macos_deployment_target.py
 
-      - name: Push oldmac
+      - name: Push the branch
         if: steps.rebase.outputs.changed == 'true'
-        run: git push --force-with-lease origin oldmac
+        run: git push --force-with-lease origin "$BRANCH"
 
       - name: File an issue on failure
         if: failure()
