@@ -1,10 +1,15 @@
 name: Oldmac Wheels
 
-# Builds xberg wheels for macOS 11 and later, arm64 and x86_64, versioned
-# <upstream>+compat, and attaches them to a release of this fork. Every Mach-O
-# slice in each wheel is checked against the 11.0 floor before the release.
-# Dispatch only: the wheels build on demand, when lilbee needs a version with no
-# macOS 11 wheel on PyPI. The build mirrors the macOS leg of publish.yaml.
+# Builds the xberg Python wheel set of upstream's publish.yaml (manylinux 2_28
+# x86_64 and aarch64, musllinux 1_2 x86_64 and aarch64, Windows amd64, macOS
+# arm64 and x86_64), versioned <upstream>+compat, and attaches it to a release
+# of this fork. The macOS wheels target macOS 11 instead of 15. Every Mach-O
+# slice is checked with otool against the 11.0 floor, every Linux wheel is
+# shown by auditwheel, and every wheel is installed and run once.
+# Dispatch only: the wheels build on demand, when lilbee needs a version that
+# PyPI does not carry. The wheels are abi3, so one wheel serves every CPython
+# from 3.10. Upstream builds no sdist for a fork release (it needs the version
+# on crates.io), so none is built here.
 
 on:
   workflow_dispatch:
@@ -21,26 +26,41 @@ on:
 permissions:
   contents: read
 
+env:
+  GLIBC_FLOOR: "2.28"
+
 jobs:
   wheels:
     name: wheel (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 240
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-15-intel]
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-2022, macos-15, macos-15-intel]
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           submodules: false
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: Install system dependencies
         uses: ./.github/actions/install-system-deps
 
       - name: Stamp the +compat version
-        run: python3 .github/scripts/compat_version.py
+        shell: bash
+        run: python .github/scripts/compat_version.py
+
+      - name: Setup ONNX Runtime (Windows)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-onnx-runtime
+        with:
+          ort-version: "1.24.2"
+          dest-dir: crates/xberg-py
 
       - name: Build wheels
         uses: xberg-io/actions/build-python-wheels@v1
@@ -50,19 +70,91 @@ jobs:
           cibw-build: "cp311-*"
           upload-artifact: "false"
           build-libheif: "true"
+          manylinux-x86_64-image: "manylinux_2_28"
+          manylinux-aarch64-image: "manylinux_2_28"
+          cibw-before-build-linux: |
+            set -euo pipefail
+            pip install maturin uv
+            source ~/.cargo/env
+            export CFLAGS="-std=gnu11"
+            export CXXFLAGS="-std=gnu++17"
+            export CPPFLAGS="-std=gnu11"
+            export CMAKE_C_FLAGS="${CFLAGS}"
+            export CMAKE_CXX_FLAGS="${CXXFLAGS}"
+            export CC="gcc ${CFLAGS}"
+            export CXX="g++ ${CXXFLAGS}"
+            ort_version=1.24.2
+            case "$(uname -m)" in aarch64 | arm64) ort_arch=aarch64 ;; *) ort_arch=x64 ;; esac
+            curl -fsSL -o /tmp/ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ort_version}/onnxruntime-linux-${ort_arch}-${ort_version}.tgz"
+            mkdir -p /opt/msort && tar -xzf /tmp/ort.tgz -C /opt/msort --strip-components=1
+          cibw-environment: 'MATURIN_BUILD_ARGS="--compatibility manylinux_2_28" CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=gcc CC_x86_64_unknown_linux_gnu=gcc CC_aarch64_unknown_linux_gnu=gcc CXX_x86_64_unknown_linux_gnu=g++ CXX_aarch64_unknown_linux_gnu=g++ ORT_STRATEGY=system ORT_LIB_LOCATION=/opt/msort/lib ORT_SKIP_DOWNLOAD=1 ORT_PREFER_DYNAMIC_LINK=1 LD_LIBRARY_PATH=/opt/msort/lib'
           cibw-before-build-macos: bash {project}/scripts/ci/build-macos-heif-deps.sh
           cibw-environment-macos: 'MATURIN_BUILD_ARGS="" CARGO_BUILD_LOCKED=true MACOSX_DEPLOYMENT_TARGET=11.0 PKG_CONFIG_PATH=/tmp/xberg-heif/lib/pkgconfig'
+          cibw-before-build-windows: "rustup install 1.99.1-x86_64-pc-windows-msvc --profile minimal --component rust-src --component rustfmt --component clippy && rustup target add x86_64-pc-windows-msvc --toolchain 1.99.1-x86_64-pc-windows-msvc && pip install maturin uv && set PATH=%USERPROFILE%\\.cargo\\bin;%PATH%"
+          cibw-environment-windows: 'MATURIN_BUILD_ARGS="--target x86_64-pc-windows-msvc" RUSTUP_TOOLCHAIN="1.99.1-x86_64-pc-windows-msvc" RUSTC_WRAPPER='
+
+      - name: Vendor ONNX Runtime into wheel
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          for w in wheelhouse/*.whl; do bash scripts/ci/vendor-native-closure.sh "$w"; done
+
+      - name: Test Windows wheel closure contracts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: mise run python:wheel:closure:test
+
+      - name: Vendor ONNX Runtime into wheel (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path wheelhouse -Filter "*.whl" | ForEach-Object {
+            & "${{ github.workspace }}\scripts\ci\vendor-windows-wheel-closure.ps1" -Wheel $_.FullName -DllSourceDir "$env:ORT_LIB_LOCATION" -NativeGlob "*.pyd"
+            if ($LASTEXITCODE -ne 0) { throw "vendor-windows-wheel-closure failed for $($_.FullName)" }
+          }
+
+      - name: Verify wheel-local PE dependency closure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path wheelhouse -Filter "*.whl" | ForEach-Object {
+            & "${{ github.workspace }}\scripts\ci\verify-windows-dll-closure.ps1" -Artifact $_.FullName -NativeGlob "*.pyd"
+            if ($LASTEXITCODE -ne 0) { throw "verify-windows-dll-closure failed for $($_.FullName)" }
+          }
+
+      - name: Verify wheel glibc floor and bundled ONNX Runtime
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          for w in wheelhouse/*.whl; do bash scripts/ci/verify-glibc-floor.sh "$w" "$GLIBC_FLOOR"; done
+
+      - name: Show the manylinux policy of every wheel
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet auditwheel
+          for w in wheelhouse/*.whl; do python -m auditwheel show "$w"; done
 
       - name: Check the macOS floor of every slice
+        if: runner.os == 'macOS'
+        shell: bash
         run: bash .github/scripts/check_minos.sh 11.0 wheelhouse/*.whl
 
       - name: Smoke-test the wheel
+        shell: bash
         run: |
           set -euo pipefail
           wheel="$(find wheelhouse -name '*.whl' | head -n1)"
-          python3 -m venv smoke-venv
-          smoke-venv/bin/python -m pip install --no-cache-dir --quiet "$wheel"
-          smoke-venv/bin/python scripts/ci/smoke_test_python_wheel.py \
+          python="python3"
+          venv_python="smoke-venv/bin/python"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            python="python"
+            venv_python="smoke-venv/Scripts/python.exe"
+          fi
+          "$python" -m venv smoke-venv
+          "$venv_python" -m pip install --no-cache-dir --quiet "$wheel"
+          "$venv_python" scripts/ci/smoke_test_python_wheel.py \
             scripts/ci/fixtures/musl-python-smoke.pdf "XBERG MUSL SMOKE 490"
 
       - uses: actions/upload-artifact@v4
@@ -71,9 +163,69 @@ jobs:
           path: wheelhouse/*.whl
           if-no-files-found: error
 
+  wheels-musl:
+    name: wheel (musl-${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, arch: x86_64, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, arch: aarch64, target: aarch64-unknown-linux-musl }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Stamp the +compat version
+        run: python .github/scripts/compat_version.py
+
+      - name: Resolve build id
+        id: build_id
+        run: |
+          set -euo pipefail
+          id=$(git rev-parse HEAD)
+          [ -n "$id" ] || { echo "::error::git rev-parse HEAD produced an empty build id"; exit 1; }
+          echo "value=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Build Python wheel via Alpine Docker
+        run: |
+          docker build -f docker/Dockerfile.musl-python \
+            --build-arg XBERG_BUILD_ID=${{ steps.build_id.outputs.value }} \
+            --build-arg TARGET=${{ matrix.target }} \
+            --output type=local,dest=./wheelhouse .
+
+      - name: Verify musl wheel produced
+        run: |
+          test -n "$(find wheelhouse -name '*.whl')" || {
+            echo "::error::no wheel produced by musl build for ${{ matrix.target }}"; exit 1; }
+
+      - name: Show the musllinux policy of every wheel
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet auditwheel
+          for w in wheelhouse/*.whl; do python -m auditwheel show "$w"; done
+
+      - name: Smoke-test musl wheel
+        run: |
+          wheel="$(find wheelhouse -name '*.whl' | head -n1)"
+          bash scripts/ci/smoke-test-musl-python-wheel.sh "$wheel"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oldmac-wheel-musl-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
   release:
     name: release
-    needs: wheels
+    needs: [wheels, wheels-musl]
     if: ${{ inputs.publish }}
     runs-on: ubuntu-latest
     permissions:
@@ -97,6 +249,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
+          ls wheelhouse/*.whl | wc -l
+          sha256sum wheelhouse/*.whl
           wheel="$(ls wheelhouse/*.whl | head -n 1)"
           version="$(basename "$wheel" | cut -d- -f2)"
           tag="${RELEASE_TAG:-v${version}}"
@@ -105,6 +259,6 @@ jobs:
             git push origin "$tag"
             gh release create "$tag" -R "$GITHUB_REPOSITORY" --verify-tag \
               --prerelease --title "$tag" \
-              --notes "xberg wheels for macOS 11 and later (arm64, x86_64), built from the oldmac branch."
+              --notes "xberg wheels (manylinux, musllinux, Windows, macOS 11 and later), built from the oldmac branch."
           fi
           gh release upload "$tag" wheelhouse/*.whl -R "$GITHUB_REPOSITORY" --clobber
