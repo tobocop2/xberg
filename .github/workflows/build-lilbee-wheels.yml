@@ -1,0 +1,27 @@
+name: Lilbee Wheels
+
+# GitHub dispatches a workflow only when its file exists on the default branch.
+# This file registers the wheel workflow of the lilbee-main branch. Run it with
+# --ref lilbee-main: that branch carries the real build. Dispatched on this
+# branch it builds nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Attach the wheels to a release of this fork
+        type: boolean
+        default: true
+      release_tag:
+        description: Tag for a test release, instead of v<version>; delete it afterwards
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  registered:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "This branch builds no lilbee wheels. Dispatch with --ref lilbee-main."
