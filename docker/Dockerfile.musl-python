@@ -70,6 +70,10 @@ ENV CXX_x86_64_unknown_linux_musl=g++
 # through its `!id.is_empty()` check and silently restores the collision. ~keep
 ARG XBERG_BUILD_ID
 
+# Cargo reads this build argument as its LTO setting for the release profile. The aarch64 job passes
+# `thin`, because fat LTO of xberg-py runs out of memory on the arm runner.
+ARG CARGO_PROFILE_RELEASE_LTO=fat
+
 # `manifest-path` in packages/python/pyproject.toml points at
 # ../../crates/xberg-py/Cargo.toml, so maturin must run with packages/python as
 # its working directory to resolve that relative path against this layout.

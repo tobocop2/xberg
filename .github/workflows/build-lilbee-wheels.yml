@@ -49,7 +49,21 @@ jobs:
           python-version: "3.13"
 
       - name: Install system dependencies
+        if: matrix.os != 'macos-15-intel'
         uses: ./.github/actions/install-system-deps
+
+      # Homebrew carries no bottles for Intel macOS, so the shared action builds php, boost and
+      # tesseract from source for hours. The wheel builds tesseract from its own crate and needs
+      # only cmake and pkg-config from the runner image.
+      - name: Check build tools (macOS Intel)
+        if: matrix.os == 'macos-15-intel'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in cmake pkg-config; do
+            command -v "$tool" >/dev/null || { echo "::error::$tool is missing from the runner image"; exit 1; }
+            "$tool" --version | head -n 1
+          done
 
       - name: Stamp the +lilbee version
         shell: bash
@@ -89,7 +103,16 @@ jobs:
             mkdir -p /opt/msort && tar -xzf /tmp/ort.tgz -C /opt/msort --strip-components=1
           # Fat LTO of xberg-py on the arm runner is killed with SIGKILL (out of memory) after 25
           # minutes. Thin LTO bounds the peak, as upstream does for its aarch64 builds.
-          cibw-environment: 'MATURIN_BUILD_ARGS="--compatibility manylinux_2_28" CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=gcc CC_x86_64_unknown_linux_gnu=gcc CC_aarch64_unknown_linux_gnu=gcc CXX_x86_64_unknown_linux_gnu=g++ CXX_aarch64_unknown_linux_gnu=g++ ORT_STRATEGY=system ORT_LIB_LOCATION=/opt/msort/lib ORT_SKIP_DOWNLOAD=1 ORT_PREFER_DYNAMIC_LINK=1 LD_LIBRARY_PATH=/opt/msort/lib ${{ contains(matrix.os, 'arm') && 'CARGO_PROFILE_RELEASE_LTO=thin' || '' }}'
+          # The folded value below becomes one line of NAME=value pairs.
+          cibw-environment: >-
+            MATURIN_BUILD_ARGS="--compatibility manylinux_2_28"
+            CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=gcc
+            CC_x86_64_unknown_linux_gnu=gcc CC_aarch64_unknown_linux_gnu=gcc
+            CXX_x86_64_unknown_linux_gnu=g++ CXX_aarch64_unknown_linux_gnu=g++
+            ORT_STRATEGY=system ORT_LIB_LOCATION=/opt/msort/lib ORT_SKIP_DOWNLOAD=1
+            ORT_PREFER_DYNAMIC_LINK=1 LD_LIBRARY_PATH=/opt/msort/lib
+            CARGO_PROFILE_RELEASE_LTO=${{ contains(matrix.os, 'arm') && 'thin' || 'fat' }}
           cibw-before-build-macos: bash {project}/scripts/ci/build-macos-heif-deps.sh
           cibw-environment-macos: 'MATURIN_BUILD_ARGS="" CARGO_BUILD_LOCKED=true MACOSX_DEPLOYMENT_TARGET=11.0 PKG_CONFIG_PATH=/tmp/xberg-heif/lib/pkgconfig'
           cibw-before-build-windows: "rustup install 1.99.1-x86_64-pc-windows-msvc --profile minimal --component rust-src --component rustfmt --component clippy && rustup target add x86_64-pc-windows-msvc --toolchain 1.99.1-x86_64-pc-windows-msvc && pip install maturin uv && set PATH=%USERPROFILE%\\.cargo\\bin;%PATH%"
@@ -201,6 +224,7 @@ jobs:
           docker build -f docker/Dockerfile.musl-python \
             --build-arg XBERG_BUILD_ID=${{ steps.build_id.outputs.value }} \
             --build-arg TARGET=${{ matrix.target }} \
+            --build-arg CARGO_PROFILE_RELEASE_LTO=${{ contains(matrix.target, 'aarch64') && 'thin' || 'fat' }} \
             --output type=local,dest=./wheelhouse .
 
       - name: Verify musl wheel produced
@@ -259,8 +283,10 @@ jobs:
           if ! gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             git tag "$tag"
             git push origin "$tag"
+            flags=()
+            [ -z "${RELEASE_TAG}" ] || flags+=(--prerelease)
             gh release create "$tag" -R "$GITHUB_REPOSITORY" --verify-tag \
-              --prerelease --title "$tag" \
+              "${flags[@]}" --title "$tag" \
               --notes "xberg wheels (manylinux, musllinux, Windows, macOS 11 and later), built from the lilbee-main branch."
           fi
           gh release upload "$tag" wheelhouse/*.whl -R "$GITHUB_REPOSITORY" --clobber
