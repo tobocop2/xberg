@@ -1,6 +1,7 @@
 name: sync-upstream
 
-# Re-applies the oldmac patch onto the newest upstream release tag. The patch
+# Re-applies the oldmac patch onto the newest published upstream release (not a
+# draft, not a prerelease). The patch
 # commits are rebased with `git rebase --onto`, so oldmac stays a short series
 # on top of one upstream tag. A conflict aborts and leaves oldmac untouched.
 # Pushes use a deploy key (SYNC_SSH_KEY secret): the patch changes workflow
@@ -24,6 +25,7 @@ concurrency:
 env:
   UPSTREAM: https://github.com/xberg-io/xberg
   TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+  UPSTREAM_REPO: xberg-io/xberg
 
 jobs:
   sync:
@@ -38,13 +40,21 @@ jobs:
 
       - name: Rebase the patch onto the newest upstream release tag
         id: rebase
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream "$UPSTREAM"
           git fetch upstream --tags --force --quiet
-          newest="$(git tag -l 'v*' | grep -E "$TAG_PATTERN" | sort -V | tail -n 1)"
+          published="$(gh api --paginate "repos/$UPSTREAM_REPO/releases" \
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')"
+          newest="$(printf '%s\n' "$published" | grep -E "$TAG_PATTERN" | sort -V | tail -n 1)"
+          if [ -z "$newest" ] || ! git rev-parse -q --verify "refs/tags/$newest" >/dev/null; then
+            echo "no published upstream release with a fetched tag" >&2
+            exit 1
+          fi
           base="$(git merge-base HEAD "$newest")"
           echo "newest upstream tag: $newest (commit $(git rev-parse --short "$newest^{commit}"))"
           echo "tag=$newest" >> "$GITHUB_OUTPUT"
