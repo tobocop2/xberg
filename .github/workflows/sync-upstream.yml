@@ -6,6 +6,9 @@ name: sync-upstream
 # Pushes use a deploy key (SYNC_SSH_KEY secret): the patch changes workflow
 # files, which the Actions token cannot push. A failed run opens one issue.
 on:
+  push:
+    branches: [oldmac]
+    paths: [.github/workflows/sync-upstream.yml]
   schedule:
     - cron: "0 8 * * 1"   # Mondays 08:00 UTC
   workflow_dispatch:
