@@ -1,0 +1,97 @@
+name: Oldmac Wheels
+
+# Builds xberg wheels for macOS 11 and later, arm64 and x86_64, versioned
+# <upstream>+compat, and attaches them to a release of this fork. Every Mach-O
+# slice in each wheel is checked against the 11.0 floor before the release.
+# Dispatch only: the wheels build on demand, when lilbee needs a version with no
+# macOS 11 wheel on PyPI. The build mirrors the macOS leg of publish.yaml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Attach the wheels to a release of this fork
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: wheel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Install system dependencies
+        uses: ./.github/actions/install-system-deps
+
+      - name: Stamp the +compat version
+        run: python3 .github/scripts/compat_version.py
+
+      - name: Build wheels
+        uses: xberg-io/actions/build-python-wheels@v1
+        with:
+          python-version: "3.13"
+          package-dir: packages/python
+          cibw-build: "cp311-*"
+          upload-artifact: "false"
+          build-libheif: "true"
+          cibw-before-build-macos: bash {project}/scripts/ci/build-macos-heif-deps.sh
+          cibw-environment-macos: 'MATURIN_BUILD_ARGS="" CARGO_BUILD_LOCKED=true MACOSX_DEPLOYMENT_TARGET=11.0 PKG_CONFIG_PATH=/tmp/xberg-heif/lib/pkgconfig'
+
+      - name: Check the macOS floor of every slice
+        run: bash .github/scripts/check_minos.sh 11.0 wheelhouse/*.whl
+
+      - name: Smoke-test the wheel
+        run: |
+          set -euo pipefail
+          wheel="$(find wheelhouse -name '*.whl' | head -n1)"
+          python3 -m venv smoke-venv
+          smoke-venv/bin/python -m pip install --no-cache-dir --quiet "$wheel"
+          smoke-venv/bin/python scripts/ci/smoke_test_python_wheel.py \
+            scripts/ci/fixtures/musl-python-smoke.pdf "XBERG MUSL SMOKE 490"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oldmac-wheel-${{ matrix.os }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  release:
+    name: release
+    needs: wheels
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: oldmac-wheel-*
+          merge-multiple: true
+          path: wheelhouse
+
+      - name: Create or update the fork release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          wheel="$(ls wheelhouse/*.whl | head -n 1)"
+          version="$(basename "$wheel" | cut -d- -f2)"
+          tag="v${version}"
+          if ! gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --prerelease --title "$tag" \
+              --notes "xberg wheels for macOS 11 and later (arm64, x86_64), built from the oldmac branch."
+          fi
+          gh release upload "$tag" wheelhouse/*.whl -R "$GITHUB_REPOSITORY" --clobber

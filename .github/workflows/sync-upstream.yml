@@ -1,0 +1,85 @@
+name: sync-upstream
+
+# Re-applies the oldmac patch onto the newest upstream release tag. The patch
+# commits are rebased with `git rebase --onto`, so oldmac stays a short series
+# on top of one upstream tag. A conflict aborts and leaves oldmac untouched.
+# Pushes use a deploy key (SYNC_SSH_KEY secret): the patch changes workflow
+# files, which the Actions token cannot push. A failed run opens one issue.
+on:
+  schedule:
+    - cron: "0 8 * * 1"   # Mondays 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://github.com/xberg-io/xberg
+  TAG_PATTERN: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.SYNC_SSH_KEY }}
+          ref: oldmac
+          fetch-depth: 0
+
+      - name: Rebase the patch onto the newest upstream release tag
+        id: rebase
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM"
+          git fetch upstream --tags --force --quiet
+          newest="$(git tag -l 'v*' | grep -E "$TAG_PATTERN" | sort -V | tail -n 1)"
+          base="$(git merge-base HEAD "$newest")"
+          echo "newest upstream tag: $newest (commit $(git rev-parse --short "$newest^{commit}"))"
+          echo "tag=$newest" >> "$GITHUB_OUTPUT"
+          if [ "$base" = "$(git rev-parse "$newest^{commit}")" ]; then
+            echo "oldmac already sits on $newest"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git rebase --onto "$newest" "$base"; then
+            echo "rebase onto $newest conflicts in:" >&2
+            git diff --name-only --diff-filter=U >&2
+            git rebase --abort
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check the patched floor tests
+        run: |
+          python -m pip install pyyaml
+          python scripts/ci/test_macos_deployment_target.py
+
+      - name: Push oldmac
+        if: steps.rebase.outputs.changed == 'true'
+        run: git push --force-with-lease origin oldmac
+
+      - name: File an issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list -R "$GITHUB_REPOSITORY" --state open \
+            --search "sync-upstream failed in:title" --json number --jq length)
+          if [ "$existing" = "0" ]; then
+            gh issue create -R "$GITHUB_REPOSITORY" \
+              --title "sync-upstream failed: oldmac needs a hand" \
+              --body "The scheduled sync could not re-apply the oldmac patch onto the newest upstream release tag, or the floor tests failed. Rebase oldmac by hand and push it. Failed run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          fi
