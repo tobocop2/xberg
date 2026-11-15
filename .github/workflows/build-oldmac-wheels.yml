@@ -75,6 +75,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The release tag points at a commit that changes workflow files, which the
+      # Actions token cannot tag. The deploy key creates the tag.
+      - uses: actions/checkout@v7
+        with:
+          ssh-key: ${{ secrets.SYNC_SSH_KEY }}
+
       - uses: actions/download-artifact@v4
         with:
           pattern: oldmac-wheel-*
@@ -90,7 +96,9 @@ jobs:
           version="$(basename "$wheel" | cut -d- -f2)"
           tag="v${version}"
           if ! gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$tag" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            git tag "$tag"
+            git push origin "$tag"
+            gh release create "$tag" -R "$GITHUB_REPOSITORY" --verify-tag \
               --prerelease --title "$tag" \
               --notes "xberg wheels for macOS 11 and later (arm64, x86_64), built from the oldmac branch."
           fi
