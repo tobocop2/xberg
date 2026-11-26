@@ -65,6 +65,19 @@ jobs:
           smoke-venv/bin/python scripts/ci/smoke_test_python_wheel.py \
             scripts/ci/fixtures/musl-python-smoke.pdf "XBERG MUSL SMOKE 490"
 
+      # Same step as the macOS leg of publish.yaml: the wheel ships LICENSE and
+      # THIRD_PARTY_LICENSES.md under .dist-info/licenses, like the PyPI wheel.
+      - name: Inject canonical notices (wheel)
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(wheelhouse/*.whl)
+          [ "${#archives[@]}" -eq 1 ] || {
+            echo "::error::expected exactly one wheel in wheelhouse, found ${#archives[@]}"; exit 1;
+          }
+          python3 scripts/ci/package-notices.py inject --format wheel --expected-count 1 "${archives[@]}"
+
       - uses: actions/upload-artifact@v4
         with:
           name: oldmac-wheel-${{ matrix.os }}
