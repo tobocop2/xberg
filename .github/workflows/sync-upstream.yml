@@ -1,14 +1,16 @@
 name: sync-upstream
 
-# Re-applies the oldmac and lilbee-main patches onto the newest published upstream release (not a
-# draft, not a prerelease). The patch
-# commits are rebased with `git rebase --onto`, so oldmac stays a short series
-# on top of one upstream tag. A conflict aborts and leaves oldmac untouched.
+# Re-applies the oldmac patch onto the newest published upstream release (not a
+# draft, not a prerelease). The base is the newest published release tag that is
+# already an ancestor of oldmac, so upstream's own release-branch commits (such as
+# the Swift checksum commit a tag sits on) are never replayed as fork patches.
+# The patch commits are rebased with `git rebase --onto`, so oldmac stays a short
+# series on top of one upstream tag. A conflict aborts and leaves oldmac untouched.
 # Pushes use a deploy key (SYNC_SSH_KEY secret): the patch changes workflow
 # files, which the Actions token cannot push. A failed run opens one issue.
 on:
   push:
-    branches: [oldmac, lilbee-main]
+    branches: [oldmac]
     paths: [.github/workflows/sync-upstream.yml]
   schedule:
     - cron: "0 8 * * 1"   # Mondays 08:00 UTC
@@ -35,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        branch: [oldmac, lilbee-main]
+        branch: [oldmac]
     env:
       BRANCH: ${{ matrix.branch }}
     steps:
@@ -62,7 +64,19 @@ jobs:
             echo "no published upstream release with a fetched tag" >&2
             exit 1
           fi
-          base="$(git merge-base HEAD "$newest")"
+          base=""
+          for tag in $(printf '%s\n' "$published" | grep -E "$TAG_PATTERN" | sort -rV); do
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
+              && git merge-base --is-ancestor "$tag^{commit}" HEAD; then
+              base="$(git rev-parse "$tag^{commit}")"
+              echo "current base: $tag (commit $(git rev-parse --short "$base"))"
+              break
+            fi
+          done
+          if [ -z "$base" ]; then
+            echo "$BRANCH sits on no published upstream release tag" >&2
+            exit 1
+          fi
           echo "newest upstream tag: $newest (commit $(git rev-parse --short "$newest^{commit}"))"
           echo "tag=$newest" >> "$GITHUB_OUTPUT"
           if [ "$base" = "$(git rev-parse "$newest^{commit}")" ]; then
