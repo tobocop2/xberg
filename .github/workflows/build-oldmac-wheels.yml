@@ -4,7 +4,8 @@ name: Oldmac Wheels
 # <upstream>+compat, and attaches them to a release of this fork. Every Mach-O
 # slice in each wheel is checked against the 11.0 floor before the release.
 # Dispatch only: the wheels build on demand, when lilbee needs a version with no
-# macOS 11 wheel on PyPI. The build mirrors the macOS leg of publish.yaml.
+# macOS 11 wheel on PyPI. The build mirrors the macOS leg of publish.yaml, without
+# its system dependency step.
 
 on:
   workflow_dispatch:
@@ -36,9 +37,10 @@ jobs:
           fetch-depth: 0
           submodules: false
 
-      - name: Install system dependencies
-        uses: ./.github/actions/install-system-deps
-
+      # No install-system-deps step: the wheel vendors Tesseract, Leptonica and Boost,
+      # build-macos-heif-deps.sh builds the codec stack, and cmake and pkg-config come with
+      # the runner image. Homebrew has no Intel bottles, so that step compiled ~40 formulae
+      # the wheel never links (3h08m on macos-15-intel).
       - name: Stamp the +compat version
         run: python3 .github/scripts/compat_version.py
 
