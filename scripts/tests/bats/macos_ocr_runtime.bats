@@ -39,6 +39,29 @@ setup() {
 	xberg_assert_status 7
 }
 
+@test "macOS OCR verification should_accept_a_later_5_5_patch_from_homebrew" {
+	export MOCK_TESS_PC=5.5.5 MOCK_TESS_CLI=5.5.5
+	run bash -euo pipefail -c 'source "$1"; verify_ocr_macos' _ "$SCRIPT"
+	xberg_assert_status 0
+	xberg_assert_output_contains 'tesseract 5.5.5'
+}
+
+@test "macOS OCR verification should_reject_cli_that_differs_from_metadata" {
+	export MOCK_TESS_PC=5.5.5 MOCK_TESS_CLI=5.5.4
+	run bash -euo pipefail -c 'source "$1"; verify_ocr_macos' _ "$SCRIPT"
+	xberg_assert_status 1
+	xberg_assert_output_contains 'matching pkg-config 5.5.5'
+}
+
+@test "macOS OCR verification should_reject_metadata_outside_the_5_5_series" {
+	for version in 5.5.3 5.6.0 6.0.0 5.5.4.1; do
+		export MOCK_TESS_PC="$version" MOCK_TESS_CLI="$version"
+		run bash -euo pipefail -c 'source "$1"; verify_ocr_macos' _ "$SCRIPT"
+		xberg_assert_status 1
+		xberg_assert_output_contains 'Expected Tesseract pkg-config 5.5.4 or a later 5.5 patch'
+	done
+}
+
 @test "macOS OCR verification should_reject_the_previous_security_patch" {
 	export MOCK_TESS_CLI=5.5.3
 	run bash -euo pipefail -c 'source "$1"; verify_ocr_macos' _ "$SCRIPT"

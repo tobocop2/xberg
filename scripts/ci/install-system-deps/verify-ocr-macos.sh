@@ -6,8 +6,14 @@ verify_ocr_macos() {
   tess_prefix="$(brew --prefix tesseract)"
   lept_prefix="$(brew --prefix leptonica)"
   export PKG_CONFIG_PATH="$tess_prefix/lib/pkgconfig:$lept_prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-  [ "$(pkg-config --modversion tesseract)" = 5.5.4 ] || {
-    echo 'Expected Tesseract pkg-config 5.5.4' >&2
+  # Homebrew ships only its newest Tesseract bottle, so the floor is 5.5.4 (the security
+  # patch) or a later 5.5 patch. The Python wheel does not link this copy: the default
+  # static-linking feature builds and statically links the pinned 5.5.4 source. Only the
+  # tesseract-dynamic feature, which the wheel never turns on, uses pkg-config. ~keep
+  local tess_version
+  tess_version="$(pkg-config --modversion tesseract)"
+  [[ "$tess_version" =~ ^5\.5\.([4-9]|[1-9][0-9]+)$ ]] || {
+    echo 'Expected Tesseract pkg-config 5.5.4 or a later 5.5 patch' >&2
     return 1
   }
   [ "$(pkg-config --modversion lept)" = 1.87.0 ] || {
@@ -15,8 +21,8 @@ verify_ocr_macos() {
     return 1
   }
   output="$(tesseract --version 2>&1)"
-  grep -qx 'tesseract 5\.5\.4' <<<"$output" || {
-    echo 'Expected actual Tesseract CLI 5.5.4' >&2
+  grep -qxF "tesseract $tess_version" <<<"$output" || {
+    echo "Expected actual Tesseract CLI 5.5.4 or a later 5.5 patch, matching pkg-config $tess_version" >&2
     return 1
   }
   grep -q 'leptonica-1\.87\.0\([^0-9.]\|$\)' <<<"$output" || {
