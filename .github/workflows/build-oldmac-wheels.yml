@@ -39,8 +39,8 @@ jobs:
 
       # No install-system-deps step: the wheel vendors Tesseract, Leptonica and Boost,
       # build-macos-heif-deps.sh builds the codec stack, and cmake and pkg-config come with
-      # the runner image. Homebrew has no Intel bottles, so that step compiled ~40 formulae
-      # the wheel never links (3h08m on macos-15-intel).
+      # the runner image. Homebrew no longer builds bottles for Intel macOS, so that step
+      # compiled 38 formulae the wheel never links (3h08m on macos-15-intel).
       - name: Stamp the +compat version
         run: python3 .github/scripts/compat_version.py
 
